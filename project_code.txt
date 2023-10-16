@@ -1,0 +1,209 @@
+#include <HTTPClient.h>
+#include <time.h>
+#include <Arduino.h>
+#include <Wire.h>
+#include <EEPROM.h>
+#include <WiFi.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "MAX30100_PulseOximeter.h"
+#include <DHT.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define DHTPIN 13
+#define DHTTYPE DHT11
+//#define MAIN_SSID "Pixel"
+//#define MAIN_PASS "Prajwal122"
+#define CSE_IP "192.168.183.159"
+#define CSE_PORT 5089
+#define OM2M_ORGIN "admin:admin"
+#define OM2M_MN "/~/in-cse/in-name/"
+#define OM2M_AE "BHUNESH_ESP"
+#define OM2M_DATA_CONT "Node-1/Data"
+#define INTERVAL 1000L
+#define REPORTING_PERIOD_MS     1000
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+DHT dht(DHTPIN, DHTTYPE);
+PulseOximeter pox;
+
+
+long int prev_millis = 0;
+unsigned long epochTime;
+uint32_t tsLastReport = 0;
+
+String apiKey = "LQ4LHOWVY4U2BHF6";     //  Enter your Write API key from ThingSpeak
+
+const char *ssid =  "Pixel";     // replace with your wifi ssid and wpa2 key
+const char *pass =  "Prajwal122";
+const char *server = "api.thingspeak.com";
+const char * ntpServer = "pool.ntp.org";
+long randNumber;
+
+
+WiFiClient client;
+HTTPClient http;
+
+unsigned long getTime() {
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime( & timeinfo)) {
+    //Serial.println("Failed to obtain time");
+    return (0);
+  }
+  time( & now);
+  return now;
+}
+
+
+void setup()
+{
+  Serial.begin(115200);
+  EEPROM.begin(32);//needed EEPROM.begin to store calibration k in eeprom
+
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;);
+  }
+  delay(2000);
+  display.clearDisplay();
+
+  Serial.println("Connecting to ");
+  Serial.println(ssid);
+
+
+  WiFi.begin(ssid, pass);
+
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  configTime(0, 0, ntpServer);
+}
+
+void onBeatDetected()
+{
+  Serial.println("Beat!");
+}
+
+void loop() {
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  int b = pox.getHeartRate();
+  int o = pox.getSpO2();
+  pox.update();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+    display.setTextSize(2);
+  display.setTextColor(WHITE);
+  display.display();
+  
+  delay(1500);
+  display.clearDisplay();
+  delay(1500);
+  display.setCursor(0, 10);
+  display.print("T:");
+  display.print(t , 2);
+  display.drawCircle(85, 10, 2, WHITE); // put degree symbol ( ° )
+  display.print("C");
+  display.display();
+  delay(1500);
+  display.clearDisplay();
+  
+  display.setCursor(0, 10);
+  display.print("H:");
+  display.print(h , 2);
+display.display();
+  delay(1500);
+  display.clearDisplay();
+
+  display.setCursor(0, 40);
+  display.print("BPM:");
+  display.print(b, 2);
+  display.display();
+  delay(1500);
+  display.clearDisplay();
+
+  display.setCursor(0, 40);
+  display.print("SpO2:");
+  display.print(o, 2);
+  display.display();
+  delay(1500);
+  display.clearDisplay();
+
+
+if (client.connect(server, 80))  //   "184.106.153.149" or api.thingspeak.com
+{
+
+  String postStr = apiKey;
+  postStr += "&field1=";
+  postStr += String(t, 2);
+  postStr += "&field2=";
+  postStr += String(h, 2);
+  postStr += "&field3=";
+  postStr += String(b, 2);
+  postStr += "&field4=";
+  postStr += String(o, 2);
+  postStr += "\r\n\r\n\r\n\r\n";
+  delay(500);
+
+  client.print("POST /update HTTP/1.1\n");
+  client.print("Host: api.thingspeak.com\n");
+  client.print("Connection: close\n");
+  client.print("X-THINGSPEAKAPIKEY: " + apiKey + "\n");
+  client.print("Content-Type: application/x-www-form-urlencoded\n");
+  client.print("Content-Length: ");
+  client.print(postStr.length());
+  client.print("\n\n");
+  client.print(postStr);
+  delay(500);
+}
+client.stop();
+
+if (millis() - prev_millis >= INTERVAL) {
+  epochTime = getTime();
+  String data;
+  String server = "http://" + String() + CSE_IP + ":" + String() + CSE_PORT + String() + OM2M_MN;
+
+  http.begin(server + String() + OM2M_AE + "/" + OM2M_DATA_CONT + "/");
+
+  http.addHeader("X-M2M-Origin", OM2M_ORGIN);
+  http.addHeader("Content-Type", "application/json;ty=4");
+  http.addHeader("Content-Length", "100");
+
+  data = "[" + String(epochTime) + ", " + String(h) + ", " + String(t) + ", " + String(b) + " , " + String(o) +  + "]";
+  String req_data = String() + "{\"m2m:cin\": {"
+
+                    +
+                    "\"con\": \"" + data + "\","
+
+                    +
+                    "\"lbl\": \"" + "V1.0.0" + "\","
+
+                    //+ "\"rn\": \"" + "cin_"+String(i++) + "\","
+
+                    +
+                    "\"cnf\": \"text\""
+
+                    +
+                    "}}";
+  int code = http.POST(req_data);
+  http.end();
+  Serial.println(code);
+  Serial.print("Heart rate:");
+  Serial.print(pox.getHeartRate());
+  Serial.print("SpO2:");
+  Serial.print(pox.getSpO2());
+  Serial.println("%");
+  Serial.println(t);
+  Serial.println(h);
+  prev_millis = millis();
+}
+delay(500);
+}
